@@ -30,10 +30,14 @@ Reset every item to the "enter" phase (or the "initial" phase).
 
 ## New Behavior
 
-- When `items` array has a new identity:
-  - old items must finish leaving before new items can enter
 - Instead of returning a transitions array, return a function that maps the transitions for you
-- Use a `Map` in non-unique mode instead of requiring a `keys` argument
+- Duplicate items are forbidden
+- Unique mode is the new default
+- In non-unique mode, leave transitions have their elements memoized
+- Lazy mode is the new default
+- Laziness is configurable via the `expires` prop
+  - For immediate dismount after leave, set `expires` to 0
+  - To prevent dismount until all transitions finish, set `expires` to null or Infinity
 
 ### Performance
 
