@@ -1,6 +1,6 @@
-import React, { useRef, useEffect, useState, ReactNode } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { callProp, interpolateTo } from './helpers'
-import { is, toArray, useForceUpdate, usePrev } from 'shared'
+import { is, toArray, useForceUpdate, useOnce } from 'shared'
 import { Controller } from './Controller'
 import { now } from 'shared/globals'
 
@@ -12,7 +12,6 @@ export function useTransition<T>(
   const { ref, reset } = props
   const { items, changes, transitions } = useDiff(data, props)
 
-  const forceUpdate = useForceUpdate()
   useEffect(
     () => {
       for (const { item, phase, spring, payload } of changes) {
@@ -24,7 +23,7 @@ export function useTransition<T>(
     reset ? void 0 : deps
   )
 
-  // TODO: memoize elements for deleted items when recycling is disabled
+  // TODO: memoize elements for deleted items
   const render = (render: any) =>
     items.map(item => {
       const { spring } = transitions.get(item)!
@@ -60,10 +59,8 @@ interface Transition<T = any> {
   item: T
   phase: Phase
   spring: Controller
-  /** Memoized element for deleted items */
-  element?: ReactNode
   /** Destroy no later than this date */
-  expiresAt?: number
+  expiresBy?: number
   expirationId?: number
 }
 
@@ -82,90 +79,72 @@ function useDiff<T>(data: T | readonly T[], props: any): State {
   const { reset, trail = 0, expires = Infinity } = props
 
   const items = toArray(data)
-
-  // 1. find mutual items
-  // 2. insert new transitions into copy of accumulated transitions
-  //    and populate an array of changed transitions
-  // 3. omit expired transitions from copy of accumulated transitions
-  // 4. use memoized elements for deleted items
-
-  // The transition list is recreated on each render.
   const transitions: Transition[] = []
-  const prevTransitions = usePrev(transitions)
-  if (prevTransitions && !reset) {
-    prevTransitions.forEach(t => {
-      if (t.phase < Phase.Leave) {
-      }
-    })
-  }
 
-  // The transition list is *never* mutated during render, so the "reset" prop
-  // must create a temporary map instead of clearing the existing map.
-  const usedTransitions = useRef<Map<T, Transition> | null>(null)
-  const transitions = (!reset && usedTransitions.current) || new Map()
+  // The "onRest" callbacks need a ref to the latest transitions.
+  const usedTransitions = useRef<Transition[] | null>(null)
   useEffect(() => {
     usedTransitions.current = transitions
-    return () => {
-      transitions.forEach(t => t.spring.destroy())
-    }
-  }, [transitions])
-
-  // Expired items must be omitted from "mountedItems".
-  const expired = useRef<T[] | null>(null)
-  const expiredItems = expired.current
-  useEffect(() => {
-    if (expiredItems) {
-      expired.current = null
-      expiredItems.forEach(() => {
-        transitions.delete
-      })
-    }
-  }, [expiredItems])
+  })
 
   // Track the first render for the "initial" prop.
-  const isFirst = transitions !== usedTransitions.current
+  const isFirst = reset || !usedTransitions.current
+
+  let newItems = items
+  if (!isFirst) {
+    usedTransitions.current!.forEach(t => {
+      if (is.und(t.expiresBy)) {
+        transitions.push(t)
+      } else {
+        clearTimeout(t.expirationId)
+      }
+    })
+
+    // Deduce which items are new.
+    const oldItems = transitions.map(t => t.item)
+    newItems = newItems.filter(item => oldItems.indexOf(item) < 0)
+  }
+
+  // Append transitions for new items.
+  items.forEach(item => {
+    const spring = new Controller()
+    transitions.push({ id: spring.id, item, phase: Phase.Mount, spring })
+  })
 
   // Track cumulative delay for the "trail" prop.
   let delay = -trail
 
-  // Generate the changes to apply in useEffect.
+  // Generate changes to apply in useEffect.
   const changes: Change[] = []
-  mountedItems.forEach((item, i) => {
-    const t = transitions.get(item)
-
+  transitions.forEach((t, i) => {
     let to: any
     let phase: Phase
-    if (t && t.phase < Phase.Leave) {
-      if (items.indexOf(item) < 0) {
-        to = props.leave
-        phase = Phase.Leave
-      } else if ((to = props.update)) {
-        phase = Phase.Update
-      } else return
-    } else {
+    if (t.phase == Phase.Mount) {
       to = (isFirst && props.initial) || props.enter
-      phase = t ? Phase.Enter : Phase.Mount
+      phase = Phase.Enter
+    } else {
+      const isDeleted = items.indexOf(t.item) < 0
+      if (t.phase < Phase.Leave) {
+        if (isDeleted) {
+          to = props.leave
+          phase = Phase.Leave
+        } else if ((to = props.update)) {
+          phase = Phase.Update
+        } else return
+      } else if (!isDeleted) {
+        to = props.enter
+        phase = Phase.Enter
+      } else return
     }
 
-    const spring = t ? t.spring : new Controller()
     const payload: any = {
       // When "to" is a function, it can return (1) an array of "useSpring" props,
       // (2) an async function, or (3) an object with any "useSpring" props.
-      to: to = callProp(to, item, i),
+      to: to = callProp(to, t.item, i),
       from: phase <= Phase.Enter ? callProp(props.from, item, i) : void 0,
       delay: delay += trail,
       config: callProp(props.config, item, i),
       ...(is.obj(to) && interpolateTo(to)),
-    }
-
-    /** Find items whose leave animations have finished */
-    function findExpired<T>(transitions: Map<T, Transition>) {
-      const items: T[] = []
-      transitions.forEach((t, item) => {
-        if (!is.und(t.expiresAt)) {
-          // TODO
-        }
-      })
     }
 
     const { onRest } = payload
@@ -174,15 +153,14 @@ function useDiff<T>(data: T | readonly T[], props: any): State {
         onRest(values)
       }
       if (expires <= 0) {
-        // TODO: dismount all resting deleted items
+        forceUpdate()
       } else {
         // Postpone dismounts while other controllers are active.
         const transitions = usedTransitions.current!
         if (Array.from(transitions.values()).every(t => t.spring.idle)) {
-          // TODO: dismount all resting deleted items
+          forceUpdate()
         } else {
-          const t = transitions.get(item)!
-          t.expiresAt = now() + expires
+          t.expiresBy = now() + expires
           if (expires < Infinity) {
             t.expirationId = setTimeout(() => {
               // TODO: dismount all resting deleted items
@@ -198,6 +176,11 @@ function useDiff<T>(data: T | readonly T[], props: any): State {
     if (t) change.payload = payload
     else spring.update(payload)
     changes.push(change)
+  })
+
+  // Destroy all transitions on dismount.
+  useOnce(() => () => {
+    usedTransitions.current!.forEach(t => t.spring.destroy())
   })
 
   return {
