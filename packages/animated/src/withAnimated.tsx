@@ -1,26 +1,30 @@
 import React, { forwardRef, useRef, Ref, useEffect } from 'react'
-import { is, useForceUpdate, useOnce, ElementType } from 'shared'
+import { is, useForceUpdate, useOnce, ElementType, HostConfig } from 'shared'
 import { AnimatedProps } from './AnimatedProps'
-import * as G from 'shared/globals'
 
 // For storing the animated version on the original component
 const cacheKey = Symbol.for('AnimatedComponent')
 
 type AnimatableComponent = string | Exclude<ElementType, string>
 
-// A stub type that gets replaced by @react-spring/web and others.
 type WithAnimated = {
   (Component: AnimatableComponent): any
   [key: string]: any
 }
 
-export const withAnimated: WithAnimated = (Component: any) =>
+/** Bind the `hostConfig` to create an `Animated` component factory */
+export const withAnimated: {
+  bind: (unused: null, hostConfig: HostConfig) => WithAnimated
+} = (hostConfig: HostConfig, Component: any) =>
   is.str(Component)
-    ? createAnimatedComponent(Component)
+    ? createAnimatedComponent(Component, hostConfig)
     : Component[cacheKey] ||
-      (Component[cacheKey] = createAnimatedComponent(Component))
+      (Component[cacheKey] = createAnimatedComponent(Component, hostConfig))
 
-const createAnimatedComponent = (Component: any) =>
+const createAnimatedComponent = (
+  Component: any,
+  { applyAnimatedValues, getComponentProps = p => p }: HostConfig
+) =>
   forwardRef((rawProps: any, ref: Ref<any>) => {
     const node = useRef<any>(null)
     const props = useRef<AnimatedProps | null>(null)
@@ -28,7 +32,7 @@ const createAnimatedComponent = (Component: any) =>
     const forceUpdate = useForceUpdate()
     const nextProps = new AnimatedProps(rawProps, () => {
       if (!node.current) return
-      const didUpdate = G.applyAnimatedValues(
+      const didUpdate = applyAnimatedValues(
         node.current,
         nextProps.getValue(true)
       )
@@ -62,7 +66,7 @@ const createAnimatedComponent = (Component: any) =>
         ? (value: any) => (node.current = updateRef(ref, value))
         : void 0
 
-    rawProps = G.getComponentProps(nextProps.getValue())
+    rawProps = getComponentProps(nextProps.getValue())
     return <Component {...rawProps} ref={refFn} />
   })
 

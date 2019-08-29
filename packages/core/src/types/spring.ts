@@ -1,5 +1,10 @@
-import { Animatable, EasingFunction, SpringValue, RawValues } from 'shared'
-import { AnimatedValue, Animated } from '@react-spring/animated'
+import {
+  Animatable,
+  EasingFunction,
+  SpringValue,
+  RawValues,
+  Indexable,
+} from 'shared'
 import {
   Arrify,
   Merge,
@@ -147,40 +152,6 @@ export type AnimatedNodes<State extends object> = {
   [P in StringKeys<State>]: Animation<State[P]>['animated']
 }
 
-/** These properties exist in every animation config. */
-interface AnimationConfig<T = unknown, P extends string = string> {
-  key: P
-  isNew?: boolean
-  goalValue: T
-  animatedValues: AnimatedValue[]
-  // Note: This type is not 100% accurate, but it makes TypeScript happy.
-  animated: Animated &
-    SpringValue<T> & {
-      /**
-       * Set the animated value. The `flush` argument is true by default.
-       */
-      setValue?: (newValue: T, flush?: boolean) => void
-    }
-}
-
-/** An animation ignored by the frameloop */
-export interface IdleAnimation<T = unknown, P extends string = string>
-  extends AnimationConfig<T, P> {
-  idle: true
-}
-
-/** An animation being executed by the frameloop */
-export interface ActiveAnimation<T = unknown, P extends string = string>
-  extends AnimationConfig<T, P>,
-    Omit<SpringConfig, 'velocity'> {
-  idle: false
-  config: SpringConfig
-  initialVelocity: number
-  immediate: boolean
-  toValues: Arrify<T>
-  fromValues: Arrify<T>
-}
-
 /**
  * Animation-related props
  *
@@ -189,7 +160,8 @@ export interface ActiveAnimation<T = unknown, P extends string = string>
  * Note: The `onFrame` and `onRest` props do *not* have entirely accurate
  * argument types, because the ambiguity helps with inference.
  */
-export interface AnimationProps<T extends object = {}> extends AnimationEvents {
+export interface AnimationProps<T extends object = Indexable>
+  extends AnimationEvents {
   /**
    * Configure the spring behavior for each key.
    */
@@ -197,7 +169,7 @@ export interface AnimationProps<T extends object = {}> extends AnimationEvents {
   /**
    * Milliseconds to wait before applying the other props.
    */
-  delay?: number
+  delay?: number | ((key: keyof T) => number)
   /**
    * When true, props jump to their goal values instead of animating.
    */

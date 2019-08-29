@@ -15,11 +15,15 @@ export function withDefault<T, DT>(value: T, defaultValue: DT) {
   return value == null ? defaultValue : value!
 }
 
+type AnyFn<In extends ReadonlyArray<any> = any[], Out = any> = (
+  ...args: In
+) => Out
+
 export function callProp<T>(
-  obj: T,
-  ...args: any[]
-): T extends (...args: any[]) => infer R ? R : T {
-  return is.fun(obj) ? obj(...args) : obj
+  value: T,
+  ...args: Parameters<Extract<T, AnyFn>>
+): T extends AnyFn<any[], infer U> ? U : T {
+  return is.fun(value) ? value(...args) : value
 }
 
 /**

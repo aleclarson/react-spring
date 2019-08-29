@@ -7,6 +7,7 @@ import {
   ComponentPropsWithRef,
 } from 'shared'
 import { KonvaExports, KonvaElements, elements } from './elements'
+import colorNames from 'shared/colors'
 
 type CreateAnimated = <T extends ElementType>(
   wrappedComponent: T
@@ -18,7 +19,13 @@ type KonvaComponents = {
 
 // Extend animated with all the available Konva elements
 export const animated: CreateAnimated & KonvaComponents = extendAnimated(
-  withAnimated,
+  withAnimated.bind(null, {
+    colorNames,
+    applyAnimatedValues(instance, props) {
+      if (!instance.nodeType) return false
+      instance._applyProps(instance, props)
+    },
+  }),
   elements
 )
 
