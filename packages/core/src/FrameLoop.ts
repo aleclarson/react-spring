@@ -196,7 +196,7 @@ export class FrameLoop {
               ? position > to
               : position < to
             : false
-        const isVelocity = Math.abs(velocity) <= config.precision!
+        const isVelocity = Math.abs(velocity) <= 0.05
         const isDisplacement =
           config.tension !== 0
             ? Math.abs(to - position) <= config.precision!
