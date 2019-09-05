@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react'
-import { Indexable, OneOrMore } from './types'
+import { Indexable, OneOrMore, Arrify } from './types'
 
 interface IsArray {
   <T>(a: T): a is T & readonly any[]
@@ -46,8 +46,8 @@ export const each: EachFn = (obj: Indexable, cb: any, ctx: any) => {
   }
 }
 
-export const toArray = <T>(a?: OneOrMore<T>): T[] =>
-  is.und(a) ? [] : Array.isArray(a) ? a : [a]
+export const toArray = <T>(a: T): Arrify<Exclude<T, void>> =>
+  is.und(a) ? [] : is.arr(a) ? (a as any) : [a]
 
 export const useOnce = (effect: React.EffectCallback) => useEffect(effect, [])
 

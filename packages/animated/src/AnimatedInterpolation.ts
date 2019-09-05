@@ -19,12 +19,17 @@ export class AnimatedInterpolation<
   In extends Interpolatable = Interpolatable,
   Out extends Animatable = Animatable
 > extends Animated implements SpringValue<Out> {
-  calc: Interpolator<In>
+  calc!: Interpolator<In>
+
   constructor(
     public source: OneOrMore<Animated>,
-    args: InterpolatorArgs<In, Out>
+    args?: InterpolatorArgs<In, Out>
   ) {
     super()
+    if (args) this.setConfig(args)
+  }
+
+  setConfig(args: InterpolatorArgs<In, Out>) {
     this.calc = createInterpolator(...(args as [any])) as any
   }
 

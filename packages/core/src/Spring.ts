@@ -1,10 +1,15 @@
 import { Indexable, Arrify, Merge } from './types/common'
 import { SpringConfig, Animatable, AnimationProps } from './types/spring'
-import { is, each } from 'shared'
+import { is, each, EasingFunction, toArray } from 'shared'
 import { callProp } from './helpers'
-import { AnimatedValue } from '@react-spring/animated'
+import {
+  AnimatedValue,
+  AnimatedString,
+  AnimatedArray,
+} from '@react-spring/animated'
 import invariant from 'tiny-invariant'
 import * as G from 'shared/globals'
+import { config } from './constants'
 
 /** These properties exist in every animation config. */
 // interface AnimationConfig<T = unknown> {
@@ -20,34 +25,51 @@ import * as G from 'shared/globals'
 //     }
 // }
 
+type OnStart<T> = (spring: Spring<T>) => void
+type OnChange<T> = (value: T, spring?: Spring<T>) => void
+type OnRest<T> = (result: AnimationResult<T>, spring?: Spring<T>) => void
+type AnimationResult<T> = { finished: boolean; value: T }
+
 /** An animation being executed by the frameloop */
 export interface Animation<T = any> {
   done: boolean
-  spring: Spring<T>
   values: AnimatedValue[]
   to: T | Spring<T>
-  toValues: Arrify<T>
+  toValues: number[] | null
   from: T
-  fromValues: Arrify<T>
-  config: SpringConfig & { w0?: number }
+  fromValues: number[]
+  config?: {
+    mass: number
+    tension: number
+    friction: number
+    velocity: number
+    precision: number
+    w0: number
+    easing: EasingFunction
+    duration?: number
+    clamp?: boolean
+    decay?: number | boolean
+  }
+  reverse?: boolean
   immediate: boolean
-  promise: Promise<AnimationResult<T>>
-  onStart: (key: string, animation: Animation<T>) => void
-  onFrame: (key: string, value: T) => void
-  onRest: Array<(key: string, result: AnimationResult<T>) => void>
+  promise?: Promise<AnimationResult<T>>
+  onChange?: Array<OnChange<T>>
+  onRest: Array<OnRest<T>>
+  owner: Spring<T>
 }
 
 /** Animation props not yet used */
-export type PendingProps = Merge<
+export type PendingProps<T = any> = Merge<
   AnimationProps,
   {
-    to?: Indexable
-    from?: Indexable
-    timestamp?: number
+    to?: Animatable<T> | Spring<T> | Indexable
+    from?: Animatable<T> | Spring<T> | Indexable
+    cancel?: boolean
+    onStart?: OnStart<T>
+    onChange?: OnChange<T>
+    onRest?: OnRest<T> | null
   }
 >
-
-type CachedProps = {}
 
 let nextId = 1
 
@@ -60,44 +82,48 @@ const BUSY = 2
 /** The spring stopped animating */
 const IDLE = 3
 
-type OnChange<T> = (value: T) => void
-type AnimationResult<T> = { finished: boolean; value: T }
-type OnRest<T> = (result: AnimationResult<T>) => void
-
 const noop = () => {}
+
+const defaultConfig: SpringConfig = {
+  ...config.default,
+  velocity: 0,
+  precision: 0.005,
+  easing: t => t,
+}
 
 /** An opaque animatable value */
 export class Spring<T = any> {
   readonly id = nextId++
-  /** The active animation */
+  /** The animation state */
   animation?: Animation<T>
   /** The default props */
-  defaultProps: CachedProps
+  defaultProps: PendingProps
   /** The lifecycle phase of this spring */
   private _phase = CREATED
   /** The last time each prop changed */
   private _timestamps: Indexable<number> = {}
   /** Cancel any update from before this timestamp */
   private _cancelledAt = 0
-  /** The props changed by the current diff */
-  private _changed!: Set<string>
   /** The animated props of components using this spring */
   private _children: (OnChange<T> | Spring<T>)[] = []
   /** The queue of pending props */
   private _queue: PendingProps[] = []
-  /** The animated node that may be a number, array, or interpolation */
-  private _node!: Animated
+  /** The animated node */
+  protected _node!: AnimatedValue | AnimatedArray | AnimatedString
 
-  constructor(readonly key: string, defaults?: CachedProps) {
+  constructor(readonly key: string, defaults?: PendingProps) {
     this.defaultProps = defaults ? Object.setPrototypeOf({}, defaults) : {}
   }
 
   get() {
-    return this._node.getValue()
+    return this._node.getValue() as T
   }
 
   set(value: T, flush = true) {
-    this._node.setValue(value, flush)
+    this._node.setValue(value)
+    if (flush) {
+      // TODO: notify AnimatedProps and onChange queue
+    }
   }
 
   _diff(prop: string, timestamp: number) {
@@ -123,6 +149,8 @@ export class Spring<T = any> {
     return this
   }
 
+  finish() {} // TODO
+
   _onAnimationEnd(anim: Animation<T>, finished = false) {
     this._phase = IDLE
 
@@ -131,69 +159,174 @@ export class Spring<T = any> {
       node.done = true
     })
 
-    const onRestQueue = [...anim.onRest]
-    anim.onRest.length = 1
+    const onRestQueue = anim.onRest
+    anim.onRest = []
 
     const result = { value: this.get(), finished }
-    each(onRestQueue, onRest => onRest(this.key, result))
+    each(onRestQueue, onRest => onRest(result, this))
   }
 
-  _update(props: PendingProps, timestamp: number, onRest: OnRest<T>) {
+  _update(props: PendingProps<T>, timestamp: number, onRest: OnRest<T>) {
     // Might be cancelled before start.
     if (timestamp < this._cancelledAt) {
       return
     }
 
-    // Must be a boolean.
+    // TODO: should this logic be moved to Controller?
     if (props.cancel) {
       this.stop(timestamp)
       return
     }
 
-    const diff = (prop: string) => prop in props && this._diff(prop, timestamp)
-    const anim: Partial<Animation<T>> = this.animation || {}
-    const value = this.get()
+    const diff = (prop: string) => this._diff(prop, timestamp)
+    const anim: Partial<Animation<T>> = this.animation || {
+      done: true,
+      owner: this,
+    }
 
-    // Might be undefined.
-    let to = props.to && props.to[this.key]
-    if (is.und(to) || !diff('to')) {
+    // The "reverse" prop is applied by the FrameLoop.
+    if (!is.und(props.reverse)) {
+      anim.reverse = props.reverse
+    }
+
+    const { key } = this
+
+    // The "to" and "from" props can be an animatable value, another
+    // Spring instance, or a to/from object from a Controller update.
+    let { to, from } = props as any
+
+    // Write or read the "to" prop
+    to = !is.obj(to) || to instanceof Spring ? to : to[key]
+    if (!is.und(to) && diff('to')) {
+      anim.to = to
+    } else {
       to = anim.to
     }
 
-    // When undefined, use the current value.
-    let from = props.from && props.from[this.key]
-    if (is.und(from) || !diff('from')) {
+    // Write or read the "from" prop
+    from = !is.obj(from) || from instanceof Spring ? from : from[key]
+    if (!is.und(from) && diff('from')) {
+      anim.from = from
+    } else if (props.reset) {
       from = anim.from
-      if (is.und(from)) {
-        from = value
+    }
+
+    // Use the current value when "from" is undefined.
+    if (is.und(from)) {
+      from = this.get()
+    }
+    // Start from the current value of another Spring.
+    else if (from instanceof Spring) {
+      from = from.get()
+    }
+
+    // Ensure "to" is not undefined.
+    if (is.und(to)) {
+      to = from
+    }
+
+    const changed = props.force || !isEqual(to, anim.to)
+
+    // The "config" prop is ignored for delayed updates except
+    // for when they change the goal value.
+    if (props.config && (diff('config') || changed)) {
+      let config = callProp(props.config, key) as CachedSpringConfig
+      if (config) {
+        config = { ...defaultConfig, ...config }
+
+        // Cache the angular frequency in rad/ms
+        config.w0 = Math.sqrt(config.tension / config.mass) / 1000
+
+        if (
+          anim.config &&
+          is.und(config.decay) == is.und(anim.config.decay) &&
+          is.und(config.duration) == is.und(anim.config.duration)
+        ) {
+          Object.assign(anim.config, config)
+        } else {
+          anim.config = config
+        }
       }
     }
 
-    if (props.reverse) {
-      ;[to, from] = [from, to]
-    }
+    const parent = to instanceof Spring ? to : null
+    let goal: any = parent ? null : computeGoal<T>(to)
 
-    // TODO: merge "config" here
+    // Update our internal Animated node.
+    let node = this._node
+    let nodeType: any
+    if (!node || changed) {
+      const parentType = parent && parent._node.constructor
+      nodeType =
+        parentType == AnimatedString
+          ? AnimatedValue
+          : parentType ||
+            (is.arr(goal)
+              ? AnimatedArray
+              : needsInterpolation(goal)
+              ? AnimatedString
+              : AnimatedValue)
 
-    if (!is.und(to)) {
-      const goal = computeGoal(to)
-      if (!this.animation || !isEqual(goal, anim.to)) {
-        // TODO
+      // Create a new Animated node if necessary.
+      if (!node || !(node instanceof nodeType)) {
+        // TODO: implement "create" static methods
+        this._node = node = nodeType.create(computeGoal(from), goal)
+        anim.values = Array.from(node.getPayload())
+      } else {
+        node.reset(!anim.done)
       }
     }
 
-    const onRestQueue = anim.onRest || (anim.onRest = [noop])
-    onRestQueue.push((_, result) => onRest(result))
+    if (nodeType == AnimatedString) {
+      from = 0
+      goal = 1
+    }
 
-    // The "onRest" prop is always first.
-    const onRestProp = diff('onRest') && props.onRest
-    if (onRestProp || onRestProp === null) {
-      onRestQueue[0] = onRestProp || noop
+    if (changed) {
+      anim.toValues = parent ? null : toArray(goal)
     }
 
     if (props.reset) {
+      anim.fromValues = toArray(from)
+    } else if (changed) {
+      anim.fromValues = Array.from(node.getPayload(), node =>
+        node.getValue()
+      ) as any
     }
-    if (props.cancel) {
+
+    if (props.reset || changed) {
+      anim.immediate = !!callProp(props.immediate, key)
+    }
+
+    // Event props are provided per update.
+    if (changed) {
+      const changeQueue = anim.onChange || []
+      if (props.onChange) {
+        changeQueue.push(props.onChange)
+        anim.onChange = changeQueue
+      }
+
+      // The "onRest" prop is always first in the queue.
+      const restQueue: OnRest<T>[] = (anim.onRest = [])
+      restQueue[0] = props.onRest || noop
+      restQueue.push(onRest)
+
+      if (props.onStart && !anim.immediate) {
+        props.onStart(this)
+      }
+    }
+
+    // Cast from a partial type.
+    this.animation = anim as Animation<T>
+
+    if (G.skipAnimation) {
+      this.set(parent ? parent.get() : to)
+      return this._onAnimationEnd(this.animation!, true)
+    }
+
+    if (anim.done && (props.reset || changed)) {
+      anim.done = false
+      G.frameLoop.start(this)
     }
   }
 
@@ -305,7 +438,7 @@ export class Spring<T = any> {
 }
 
 // Not all strings can be animated (eg: {display: "none"})
-function isAnimatableString(value: unknown): boolean {
+function needsInterpolation(value: unknown): value is string {
   if (!is.str(value)) return false
   return (
     value.startsWith('#') ||
@@ -318,7 +451,7 @@ function isAnimatableString(value: unknown): boolean {
 function computeGoal<T>(value: T): T {
   return is.arr(value)
     ? value.map(computeGoal)
-    : isAnimatableString(value)
+    : needsInterpolation(value)
     ? (G.createStringInterpolator as any)({
         range: [0, 1],
         output: [value, value],
