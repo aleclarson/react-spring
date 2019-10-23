@@ -1,0 +1,10 @@
+{
+  "repos": {
+    "docs": {
+      "url": "https://github.com/react-spring/react-spring.io"
+    },
+    "examples": {
+      "url": "https://github.com/react-spring/react-spring-examples"
+    }
+  }
+}

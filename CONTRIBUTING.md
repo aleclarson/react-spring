@@ -15,7 +15,7 @@ cd react-spring
 yarn
 
 # Clone the docs and examples (optional)
-yarn meta git update
+yarn indo
 ```
 
 4. Link the packages:
