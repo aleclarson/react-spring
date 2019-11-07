@@ -10,28 +10,42 @@ import {
 import * as G from 'shared/globals'
 
 import { SpringUpdate, SpringValues } from './types/spring'
-import { AnimationEvents, AnimationResult } from './types/animated'
+import {
+  OnAnimate,
+  OnRest,
+  OnStart,
+  OnChange,
+  AnimationResult,
+} from './types/animated'
 import { Indexable, Falsy } from './types/common'
-import { runAsync, scheduleProps, RunAsyncState, AsyncResult } from './runAsync'
+import {
+  runAsync,
+  scheduleProps,
+  RunAsyncState,
+  AsyncResult,
+  RunAsyncProps,
+} from './runAsync'
 import { SpringPhase, CREATED, ACTIVE, IDLE } from './SpringPhase'
 import { interpolateTo, callProp } from './helpers'
 import { SpringValue } from './SpringValue'
 import { FrameValue } from './FrameValue'
 
-const EVENT_NAMES = ['onFrame', 'onStart', 'onRest'] as const
+// These events are batched once per frame.
+const EVENT_NAMES = [
+  'onFrame',
+  'onStart',
+  'onRest',
+  'onChange',
+  'onAnimate',
+] as const
 
 /** A callback that receives the changed values for each frame. */
 export type OnFrame<State extends Indexable> = (
   frame: UnknownPartial<State>
 ) => void
 
-/** An event prop for the `Controller` class */
-type EventProp<T extends any[] = []> =
-  | (() => void)
-  | { [key: string]: (...args: T) => void }
-
 /** All event props supported by the `Controller` class */
-export type EventProps<State extends Indexable> = {
+export interface EventProps<State extends Indexable> {
   /**
    * Called on every frame when animations are active
    */
@@ -41,19 +55,30 @@ export type EventProps<State extends Indexable> = {
    *
    * Also accepts an object for per-key events
    */
-  onStart?: EventProp<[SpringValue]>
+  onStart?: (() => void) | { [P in keyof State]: OnStart<State[P]> }
   /**
    * Called when the # of animating values hits 0
    *
    * Also accepts an object for per-key events
    */
-  onRest?: EventProp<[AnimationResult]>
+  onRest?: OnRest<State> | { [P in keyof State]: OnRest<State[P]> }
+  /**
+   * Called whenever an animation is updated
+   *
+   * Also accepts an object for per-key events
+   */
+  onAnimate?: OnAnimate | { [P in keyof State]: OnAnimate<State[P]> }
+  /**
+   * Called for every change to a key/value pair
+   *
+   * Also accepts an object for per-key events
+   */
+  onChange?: OnChange | { [P in keyof State]: OnChange<State[P]> }
 }
 
 export type ControllerProps<State extends Indexable = Indexable> = unknown &
   EventProps<State> &
   SpringUpdate<State> &
-  AnimationEvents<unknown> &
   UnknownPartial<FluidProps<State>>
 
 /** The props that are cached by `Controller` objects */
@@ -88,14 +113,19 @@ export class Controller<State extends Indexable = UnknownProps>
   /** The animated state that changed in the last animation frame */
   protected _frame: UnknownPartial<State> = {}
 
+  /** The frame listener when batched events are used */
+  protected _onFrame: (() => void) | false = false
+
   /** Event handlers and async state are stored here */
   protected _state: CachedProps<State> = {}
 
   /** The spring values that manage their animations */
   protected _springs: Indexable<SpringValue> = {}
 
+  /** The animation results of each spring. Used for batched `onRest` calls. */
+  protected _results = new Map<SpringValue, AnimationResult>()
+
   constructor(props?: ControllerProps<State>) {
-    this._onFrame = this._onFrame.bind(this)
     if (props) {
       props.default = true
       this.start(props)
@@ -142,29 +172,36 @@ export class Controller<State extends Indexable = UnknownProps>
 
     const promises: AsyncResult[] = []
     each(queue as PendingProps<State>[], props => {
-      const { to, keys } = props
+      const { to, keys, onRest } = props
+
       const asyncTo = (is.arr(to) || is.fun(to)) && to
       if (asyncTo) {
         props.to = undefined
       }
+
+      if (is.fun(onRest)) {
+        // Track the animations of each spring individually.
+        props.onRest = result => {
+          this._results.set(result.spring!, result)
+        }
+      }
+
+      // Send updates to every affected key.
+      each(keys, key => {
+        const promise = this._springs[key].start(props as any)
+        promises.push(promise)
+      })
+
+      // Schedule controller-only props.
       const state = this._state
       promises.push(
-        // Send updates to every affected key.
-        ...keys.map(key => this._springs[key].start(props as any)),
-        // Schedule controller-only props.
         scheduleProps(++lastAsyncId, {
           props,
           state,
           action: (props, resolve) => {
             if (!props.cancel) {
-              const { defaultProps } = this
-              each(EVENT_NAMES, key => {
-                const value = props[key]
-                if (value && props.default) {
-                  defaultProps[key] = value
-                }
-                state[key] = value || defaultProps[key]
-              })
+              props.onRest = onRest
+              this._setState(props)
             }
 
             // Start, replace, or cancel the async animation.
@@ -246,7 +283,7 @@ export class Controller<State extends Indexable = UnknownProps>
   /** Prepare an update with the given props. */
   protected _update(propsArg: ControllerProps<State>) {
     const props: PendingProps<State> = interpolateTo(propsArg) as any
-    const keys = (props.keys = extractKeys(props, this._springs))
+    props.keys = extractKeys(props, this._springs)
 
     let { from, to } = props as any
 
@@ -257,10 +294,41 @@ export class Controller<State extends Indexable = UnknownProps>
 
     // Create our springs and give them values.
     if (from || to) {
-      this._setSprings(keys, from, to)
+      this._setSprings(props.keys, from, to)
     }
 
     return props
+  }
+
+  /** Update our internal state with the given props. */
+  protected _setState(props: PendingProps<State> & RunAsyncProps) {
+    let needsOnFrame = false
+    each(EVENT_NAMES, key => {
+      const value: any = props[key] || this.defaultProps[key]
+      if (value && props.default) {
+        this.defaultProps[key] = value
+      }
+      this._state[key] = value
+      if (is.fun(value)) {
+        needsOnFrame = true
+      }
+    })
+    this._onFrame =
+      needsOnFrame &&
+      (() => {
+        const { onFrame, onStart, onRest } = this._state
+
+        const isActive = this._active.size > 0
+        if (isActive !== (this._phase == ACTIVE)) {
+          this._phase = isActive ? ACTIVE : IDLE
+          callProp(isActive ? onStart : onRest)
+        }
+
+        if (onFrame) {
+          onFrame(this._frame)
+          this._frame = {}
+        }
+      })
   }
 
   /** @internal */
@@ -274,22 +342,6 @@ export class Controller<State extends Indexable = UnknownProps>
       if (EVENT_NAMES.some(key => is.fun(state[key]))) {
         G.frameLoop.onFrame(this._onFrame)
       }
-    }
-  }
-
-  /** @internal Called at the end of every animation frame */
-  protected _onFrame() {
-    const { onFrame, onStart, onRest } = this._state
-
-    const isActive = this._active.size > 0
-    if (isActive !== (this._phase == ACTIVE)) {
-      this._phase = isActive ? ACTIVE : IDLE
-      callProp(isActive ? onStart : onRest)
-    }
-
-    if (onFrame) {
-      onFrame(this._frame)
-      this._frame = {}
     }
   }
 }
