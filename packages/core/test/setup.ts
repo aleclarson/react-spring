@@ -1,8 +1,8 @@
 import createMockRaf from 'mock-raf'
 import { flushMicroTasks } from 'flush-microtasks'
-import { isEqual, is, FrameLoop } from 'shared'
+import { isEqual, is, FrameLoop, toArray, OpaqueAnimation } from 'shared'
 
-import { Globals, SpringValue, Controller, FrameValue } from '..'
+import { Globals, SpringValue, Controller, FrameValue, Interpolation } from '..'
 import { computeGoal } from '../src/helpers'
 
 // Allow indefinite tests, since we limit the number of animation frames
@@ -47,24 +47,26 @@ const frameObserver = {
   },
 }
 
-global.getFrames = (target: SpringValue | Controller, preserve?: boolean) => {
+global.getFrames = (target, preserve) => {
   let frames = frameCache.get(target)!
   if (!preserve) {
     frameCache.delete(target)
   }
-  if (!frames && target instanceof Controller) {
+  if (!frames) {
     frames = []
-    target.each(spring => {
-      getFrames(spring, preserve).forEach((value, i) => {
-        const frame = frames[i] || (frames[i] = {})
-        frame[spring.key!] = value
+    if (target instanceof Controller) {
+      target.each(spring => {
+        getFrames(spring, preserve).forEach((value, i) => {
+          const frame = frames[i] || (frames[i] = {})
+          frame[spring.key!] = value
+        })
       })
-    })
-    if (preserve) {
-      frameCache.set(target, frames)
+      if (preserve) {
+        frameCache.set(target, frames)
+      }
     }
   }
-  return frames || []
+  return frames
 }
 
 global.countBounces = spring => {
@@ -83,22 +85,28 @@ global.countBounces = spring => {
 global.advanceUntil = async test => {
   let steps = 0
   while (isRunning && !test()) {
-    // Clone the animation array before stepping, because idle animations
-    // will be removed before "mockRaf.step" returns.
-    const anims: SpringValue[] = []
-    for (const anim of Globals.frameLoop['_animations']) {
-      if (!anim.idle && anim instanceof SpringValue) {
-        anim.addChild(frameObserver)
-        anims.push(anim)
+    // Observe animations scheduled for next frame.
+    const values: FrameValue[] = []
+    const observe = (value: unknown) => {
+      if (value instanceof FrameValue && !value.idle) {
+        value['_children'].forEach(observe)
+        value.addChild(frameObserver)
+        values.push(value)
       }
     }
 
+    Globals.frameLoop['_animations'].forEach(observe)
     mockRaf.step()
-    for (const anim of anims) {
-      anim.removeChild(frameObserver)
+
+    // Stop observing after the frame is processed.
+    for (const value of values) {
+      value.removeChild(frameObserver)
     }
 
+    // Ensure pending effects are flushed.
     await flushMicroTasks()
+
+    // Prevent infinite recursion.
     if (++steps > 1e3) {
       throw Error('Infinite loop detected')
     }
@@ -118,9 +126,10 @@ global.advanceUntilValue = (spring, value) => {
   const from = computeGoal(spring.get())
   const goal = computeGoal(value)
 
+  const offset = getFrames(spring, true).length
   return advanceUntil(() => {
     const frames = getFrames(spring, true)
-    const value = frames.length ? frames[frames.length - 1] : from
+    const value = frames.length - offset > 0 ? frames[frames.length - 1] : from
 
     const stop = is.num(goal)
       ? goal > from

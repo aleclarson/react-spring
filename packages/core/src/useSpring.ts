@@ -41,6 +41,11 @@ export function useSpring<Props extends object>(
   SpringStopFn<UnknownProps>
 ]
 
+export function useSpring(
+  props: () => object,
+  deps?: any[]
+): [SpringValues, SpringUpdateFn<any>, SpringStopFn<any>]
+
 /**
  * Animations are updated on re-render.
  */

@@ -256,7 +256,7 @@ function describeLoopProp() {
     beforeEach(() => jest.useFakeTimers())
     afterEach(() => jest.useRealTimers())
 
-    it('resets the animation once finished', async () => {
+    fit('resets the animation once finished', async () => {
       const spring = new SpringValue(0)
       spring.start(1, {
         loop: true,
@@ -264,15 +264,15 @@ function describeLoopProp() {
       })
 
       await advanceUntilValue(spring, 1)
-      const frames = getFrames(spring)
-      expect(frames).toMatchSnapshot()
+      const firstRun = getFrames(spring)
+      expect(firstRun).toMatchSnapshot()
 
       // The loop resets the value before the next frame.
       // FIXME: Reset on next frame instead?
       expect(spring.get()).toBe(0)
 
       await advanceUntilValue(spring, 1)
-      expect(getFrames(spring)).toEqual(frames)
+      expect(getFrames(spring)).toEqual(firstRun)
     })
 
     it('can pass a custom delay', async () => {
@@ -293,22 +293,29 @@ function describeLoopProp() {
       const spring = new SpringValue(0)
 
       let loop: any = true
-      spring.start(1, { loop: () => loop })
+      spring.start(1, {
+        loop() {
+          return loop
+        },
+      })
 
       await advanceUntilValue(spring, 1)
+      expect(spring.idle).toBeFalsy()
       expect(spring.get()).toBe(0)
 
       loop = { delay: 1000 }
       await advanceUntilValue(spring, 1)
+      expect(spring.idle).toBeTruthy()
       expect(spring.get()).toBe(1)
 
       jest.runAllTimers()
+      expect(spring.idle).toBeFalsy()
       expect(spring.get()).toBe(0)
 
       loop = false
       await advanceUntilValue(spring, 1)
-      expect(spring.get()).toBe(1)
       expect(spring.idle).toBeTruthy()
+      expect(spring.get()).toBe(1)
     })
 
     it('does not affect earlier updates', async () => {

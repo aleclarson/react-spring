@@ -299,12 +299,22 @@ export class SpringValue<T = any> extends FrameValue<T> {
   /**
    * Freeze the active animation in time.
    * This does nothing when not animating.
-   *
-   * Call `start` to unpause.
    */
   pause() {
     checkDisposed(this, 'pause')
     this._phase = PAUSED
+  }
+
+  /** Resume the animation if paused. */
+  resume() {
+    checkDisposed(this, 'resume')
+    if (this.is(PAUSED)) {
+      this._start()
+
+      if (this._state.asyncTo) {
+        this._state.unpause!()
+      }
+    }
   }
 
   /**
@@ -359,15 +369,6 @@ export class SpringValue<T = any> extends FrameValue<T> {
 
   async start(to?: PendingProps<T> | Animatable<T>, arg2?: PendingProps<T>) {
     checkDisposed(this, 'start')
-
-    // Unpause if possible.
-    if (this.is(PAUSED)) {
-      this._start()
-
-      if (this._state.asyncTo) {
-        this._state.unpause!()
-      }
-    }
 
     let queue: PendingProps<T>[]
     if (!is.und(to)) {
@@ -606,14 +607,7 @@ export class SpringValue<T = any> extends FrameValue<T> {
       from = fromConfig.get()
     }
 
-    const reset = props.reset && !is.und(from)
     const changed = !is.und(to) && !isEqual(to, prevTo)
-
-    /** The current value */
-    let value = reset ? (from as T) : this.get()
-    if (is.und(from)) {
-      from = value
-    }
 
     // Ensure our Animated node is compatible with the "to" prop.
     let nodeType: AnimatedType
@@ -628,6 +622,12 @@ export class SpringValue<T = any> extends FrameValue<T> {
       nodeType = node.constructor as any
     }
 
+    // When true, start at the "from" prop.
+    const reset = props.reset && !is.und(from)
+
+    // The current value
+    let value = reset ? (from as T) : this.get()
+
     // The final value of our animation, excluding the "to" value.
     // Our goal value is dynamic when "toConfig" exists.
     let goal: any = toConfig ? null : computeGoal(to)
@@ -635,6 +635,8 @@ export class SpringValue<T = any> extends FrameValue<T> {
     if (nodeType == AnimatedString) {
       from = 0 as any
       goal = 1
+    } else if (is.und(from)) {
+      from = value
     }
 
     // Ensure the current value equals the "from" value when reset

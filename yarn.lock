@@ -4226,6 +4226,11 @@ fluids@^0.1.0:
   resolved "https://registry.npmjs.org/fluids/-/fluids-0.1.4.tgz#17b638cfe3c96d595943477fe6fa95c5088549eb"
   integrity sha512-sh5sLL1Ai7yyHDAcgXBdg03oiQtwp3eK0PaLkABcT4UCpSBp9+42PmitX88GmoXT6HsA5du0CmpfT5BqOzPOuw==
 
+flush-microtasks@^1.0.1:
+  version "1.0.1"
+  resolved "https://registry.npmjs.org/flush-microtasks/-/flush-microtasks-1.0.1.tgz#ed3cf034c71dc222c6a9054af650e2b5e9ba1c94"
+  integrity sha512-NvtApTWP9g282PecFpCZY7x28kFx9OusnRUXa4lyUh6q+QNazNbbQOMcEuVt5ZLM7rT8GnU2attGHrg3v4bjsw==
+
 flush-write-stream@^1.0.0:
   version "1.1.1"
   resolved "https://registry.npmjs.org/flush-write-stream/-/flush-write-stream-1.1.1.tgz#8dd7d873a1babc207d94ead0c2e0e44276ebf2e8"
@@ -9570,11 +9575,6 @@ typescript-rewrite-paths@^1.2.0:
   integrity sha512-4rYNw8He/RFQttZKrnkU8PVTPfRaOUYBGuT/oKQZY0/xLSELV6UrAgFRLOcGn2icLuxWcQa7eZnNHXo03nzU9w==
   dependencies:
     magic-string "^0.25.2"
-
-typescript-snapshots-plugin@^1.7.0:
-  version "1.7.0"
-  resolved "https://registry.npmjs.org/typescript-snapshots-plugin/-/typescript-snapshots-plugin-1.7.0.tgz#14c7699381e2244a37e4273a68fd11fd2bb480a9"
-  integrity sha512-mWoH2E7/LnXy19YaJKKTWQCajRAdyFMNeMpUFN8XqB0zf/cNTM5JiiGpdpXtzjb3iyzwSEWcGqD8WA0XRp5eug==
 
 typescript@3.6.2:
   version "3.6.2"
