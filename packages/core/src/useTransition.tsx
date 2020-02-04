@@ -71,8 +71,8 @@ type Key = string | number
 
 export type ItemKeys<T = any> = OneOrMore<Key> | ((item: T) => Key) | null
 
-export type UseTransitionProps<Item = any> = Merge<
-  AnimationProps & AnimationEvents,
+export type UseTransitionProps<Item = any, From = {}> = Merge<
+  PhaseProps<Item, From> & AnimationProps & AnimationEvents,
   {
     /**
      * Used to access the imperative API.
@@ -119,13 +119,13 @@ function getKeys(
 
 export function useTransition<Item, From, Props extends object>(
   data: OneOrMore<Item>,
-  props: Props & PhaseProps<Item, From> & UseTransitionProps<Item>,
+  props: Props & UseTransitionProps<Item, From>,
   deps?: any[]
 ): TransitionFn<Item, PickAnimated<Props>>
 
 export function useTransition(
   data: unknown,
-  props: PhaseProps & UseTransitionProps,
+  props: UseTransitionProps,
   deps?: any[]
 ): TransitionFn {
   const { ref, reset, sort, trail = 0, expires = Infinity } = props
